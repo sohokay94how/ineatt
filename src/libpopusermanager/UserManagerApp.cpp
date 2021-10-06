@@ -46,6 +46,11 @@ const int thePostEventPriority = Qt::NormalEventPriority;
 #include <Gdiplus.h>
 #endif
 
+#ifdef Q_OS_ANDROID
+#include <QtAndroid>
+#include <QtAndroidExtras/QAndroidJniEnvironment>
+#endif
+
 #ifndef _QT_MAKE_
 using namespace Gdiplus;
 #pragma comment(lib,"gdiplus.lib")
@@ -527,10 +532,12 @@ inline int SplitIntValue(const tstring& sSource, const char* sStart, const char*
 	}
 	return nResult;
 }
-#ifdef _DEBUG
-int abctest3(int a) {return 22+a;}
-tstring abctest2(void) {return "abc";}
-#endif
+
+//#ifdef _DEBUG
+//int abctest3(int a) {return 22+a;}
+//tstring abctest2(void) {return "abc";}
+//#endif
+
 #ifdef _QT_MAKE_
 inline bool checkCreateDir(const QString &dirName)
 {
@@ -547,6 +554,11 @@ CUserManagerApp::CUserManagerApp(void)
 : m_callback(NULL)
 , m_pHwnd(NULL)
 , m_bKilled(false)
+#ifdef Q_OS_ANDROID
+, m_nPushSslId(0)
+, m_sentSPush(false)
+#endif
+//, m_timerIdGetPushToken(0)
 , m_userStatus(US_Logout)
 //, m_serverStatus(SS_Unknown)
 , m_nLcServerState(EB_SS_INIT)
@@ -556,10 +568,12 @@ CUserManagerApp::CUserManagerApp(void)
 , m_tReLogonTime(0)
 , m_tReLoadInfo(0)
 {
-#ifdef _DEBUG
-	abctest3(1);
-//	abctest6();
-#endif
+//#ifdef _DEBUG
+//	abctest3(1);
+//	//tstring s = abctest2();
+//	//s = "";
+////	abctest6();
+//#endif
 
 #ifndef _QT_MAKE_
 //#ifdef _MSC_VER
@@ -678,26 +692,36 @@ CUserManagerApp::CUserManagerApp(void)
 	m_nServerMyDepInfoVer = -1;
 	m_nServerContactInfoVer = -1;
 
-	for (int i=0;i<20;i++)
-	{
+//#define USES_RSA_TEST
+
+    for (int i=0;i<20;i++) {
+#ifdef USES_RSA_TEST
+//        m_pRsa.SetPrivatePwd(GetSaltString());
+        m_pRsa.SetPublicFile("d:/rsa_public_key.pem");
+        m_pRsa.SetPrivateFile("d:/rsa_private_key.pem");
+//        m_pRsa.rsa_generatekey_file(1024);
+        if (!m_pRsa.rsa_open_public_file()) {
+            m_pRsa.SetPrivatePwd("");
+            continue;
+        }
+#else
 		m_pRsa.SetPrivatePwd(GetSaltString());
 		m_pRsa.rsa_generatekey_mem(1024);
-		if (m_pRsa.GetPublicKey().empty() || m_pRsa.GetPrivateKey().empty())
-		{
+        if (m_pRsa.GetPublicKey().empty() ||
+                m_pRsa.GetPrivateKey().empty()) {
 			m_pRsa.SetPrivatePwd("");
 			continue;
 		}
-		if (!m_pRsa.rsa_open_public_mem())
-		{
+        if (!m_pRsa.rsa_open_public_mem()) {
 			m_pRsa.SetPrivatePwd("");
 			continue;
 		}
+#endif
 		const tstring sFrom("eb");
 		unsigned char* pTo = NULL;
 		m_pRsa.rsa_public_encrypt((const unsigned char*)sFrom.c_str(),sFrom.size(),&pTo);
 		//m_pRsa.rsa_private_encrypt((const unsigned char*)sFrom.c_str(),sFrom.size(),&pTo);
-		if (pTo!=NULL)
-		{
+        if (pTo != NULL) {
 			delete[] pTo;
 			m_pRsa.rsa_close_public();
 			break;
@@ -725,7 +749,7 @@ CUserManagerApp::~CUserManagerApp(void)
 //	abctest1(12);
 //#endif
 	LogoutAppCenter();
-	Logout();
+    Logout(true);
 	m_pUserManager.reset();
 	m_pLogonCenter.reset();
 	m_pAppCenter.reset();
@@ -838,6 +862,25 @@ void CUserManagerApp::DoProcess(void)
 			}
 
             switch (pProcessMsgInfo->GetProcessMsgType()) {
+#ifdef Q_OS_ANDROID
+            case CProcessMsgInfo::PROCESS_MSG_TYPE_GET_PUSH_TOKEN: {
+                getPushToken();
+                if (m_sPushToken.isEmpty()) {
+                    if ((pProcessMsgInfo->m_nBigInt1++)<100) {
+                        pProcessMsgInfo->m_tProcessTime = time(0) + 3;
+                        m_pProcessMsgList.add(pProcessMsgInfo);
+                    }
+                }
+                else {
+                    /// 上传
+                    sendUMSPush();
+                }
+//                if (m_timerIdGetPushToken==0) {
+//                    m_timerIdGetPushToken = this->startTimer(3000);
+//                }
+                break;
+            }
+#endif
 			//case CProcessMsgInfo::PROCESS_MSG_TYPE_CHECK_MEMBER_HEAD:
 			//	{
 			//		const CEBMemberInfo::pointer& pEmployeeInfo = pProcessMsgInfo->m_pEmployeeInfo;
@@ -1176,6 +1219,48 @@ void CUserManagerApp::doEBUMEvent(QEvent *e)
     }
 
 }
+#ifdef Q_OS_ANDROID
+void CUserManagerApp::timerEvent(QTimerEvent *e)
+{
+//    if (m_timerIdGetPushToken!=0 && m_timerIdGetPushToken==e->timerId()) {
+//        this->getPushToken();
+//    }
+    QObject::timerEvent(e);
+}
+void CUserManagerApp::getPushToken()
+{
+    if (m_sPushToken.isEmpty()) {
+        QAndroidJniObject name = QAndroidJniObject::callStaticObjectMethod(
+                    "com/entboost/im/push/EntboostPushClient",
+                    "getPushToken",
+                    "()Ljava/lang/String;");
+        m_sPushToken = name.toString();
+    }
+//    if (!m_sPushToken.isEmpty()) {
+//        if (m_timerIdGetPushToken>0) {
+//            this->killTimer(m_timerIdGetPushToken);
+//            m_timerIdGetPushToken = 0;
+//        }
+//        /// ** 这里上传 token 到 IM 服务器
+    //    }
+}
+
+void CUserManagerApp::sendUMSPush()
+{
+    if (m_nPushSslId==0 || m_sPushToken.isEmpty()) {
+        return;
+    }
+    else if (m_sentSPush) {
+        return;
+    }
+    else if (m_userStatus != US_Logoned || m_pUserManager.get()==0) {
+        return;
+    }
+    m_sentSPush = true;
+    m_pUserManager->SendUMSPush(m_nPushSslId, m_sPushToken.toStdString());
+}
+#endif  /// Q_OS_ANDROID
+
 #endif
 
 int CUserManagerApp::LogonAppCenter(void)
@@ -1609,7 +1694,12 @@ int CUserManagerApp::SetDevAppId(mycp::bigint sAppId, const tstring& sAppKey,boo
 			//}
 		}
 
-		CPOPLogonInfo::pointer pLogonInfo = CPOPLogonInfo::create(EB_LOGON_TYPE_APPID);
+#ifdef Q_OS_ANDROID
+        const int nLogonType = EB_LOGON_TYPE_APPID|EB_LOGON_TYPE_ANDROID;
+#else
+        const int nLogonType = EB_LOGON_TYPE_APPID;
+#endif
+        CPOPLogonInfo::pointer pLogonInfo = CPOPLogonInfo::create(nLogonType);
 		pLogonInfo->m_sAppId = sAppId;
 		pLogonInfo->m_sPassword = sAppKey;
 		m_userStatus = US_DevAppIdLogoning;
@@ -1719,14 +1809,14 @@ void CUserManagerApp::LoadInfo(int nLoadSubFunc,int nLoadMsg,int nLoadGroupVer,m
 		}
 	}
 }
-void CUserManagerApp::Logout(void)
+void CUserManagerApp::Logout(bool acceptPush)
 {
 	// 必须放在前面处理
 	if (m_userStatus == US_Logging || m_userStatus == US_Logoned)
 	{
 		if (m_pUserManager.get() != NULL)
 		{
-			m_pUserManager->SendUMSMOffline();
+            m_pUserManager->SendUMSMOffline(acceptPush);
 		}
 		m_userStatus = US_Logout;	// ?
 	}
@@ -2836,13 +2926,13 @@ void CUserManagerApp::SearchUserInfo(const tstring& sSearchKey, CEBSearchCallbac
 					pExistAccountList.insert(pContactInfo->m_sEmail,true,false,NULL,false);
 				pCallback->onContactInfo(pContactInfo.get(), dwParam);
 				//lockContact.lock();
-				if (nCallbackCount>=30)
+                if (nCallbackCount>=40)
 					break;
 			}
 		}
 	}
 
-	if (bNeedOnlineSearch && nCallbackCount<20 && !sSearchKey.empty() && (m_sSearchNullKey.empty() || sSearchKey.find(m_sSearchNullKey)==std::string::npos))
+    if (bNeedOnlineSearch && nCallbackCount<30 && !sSearchKey.empty() && (m_sSearchNullKey.empty() || sSearchKey.find(m_sSearchNullKey)==std::string::npos))
 	{
 		CPOPSotpRequestInfo::pointer pSotpRequestInfo = CPOPSotpRequestInfo::create(0);
 		pSotpRequestInfo->m_pRequestList.SetParameter(CGC_PARAMETER("search-callback", (const void*)pCallback));
@@ -2880,7 +2970,7 @@ void CUserManagerApp::SearchGroupInfo(const cgcSmartString &sSearchKey, CEBSearc
             else {
                 pCallback->onGroupInfo(groupInfo.get(), 0, dwParam);
             }
-            if (nCallbackCount>=20)
+            if (nCallbackCount>=30)
                 break;
         }
     }
@@ -6856,7 +6946,8 @@ void CUserManagerApp::OnProcessTimer(const CPOPCUserManager* pUMOwner)
 		{
 			this->LoadInfo(0,0,0,nLoadGroupId);
 		}while ((nIndex++)<5 && theNeedLoadOLSList.front(nLoadGroupId));
-	}else if (m_tReLoadInfo>0 && m_tReLoadInfo<tNow)
+	}else if (m_tReLoadInfo>0 && m_tReLoadInfo<tNow && 
+		(theCheckGroupMemberList.empty() || (tNow-m_tReLoadInfo)>120))
 	{
 		theLoadOLSCount = 0;
 		LoadInfo(0,1,0);
@@ -8143,6 +8234,9 @@ void CUserManagerApp::OnLCULLogonResponse(const CPOPSotpRequestInfo::pointer & p
 		mycp::bigint nUserId = pResponseInfo->m_pResponseList.getParameterValue("uid",(mycp::bigint)0);
 		const tstring sAppOnlineKey(pResponseInfo->m_pResponseList.getParameterValue("app-online-key"));
 		tstring sLCList(pResponseInfo->m_pResponseList.getParameterValue("lc-list"));
+#ifdef Q_OS_ANDROID
+        tstring sPushSslIdList(pResponseInfo->m_pResponseList.getParameterValue("push-sslid-list"));
+#endif
 		const tstring sAccountPrefix(pResponseInfo->m_pResponseList.getParameterValue("account-prefix"));
 		const int nSystemSetting = pResponseInfo->m_pResponseList.getParameterValue("system-setting",(int)0);
 		const int nOpenRegister = pResponseInfo->m_pResponseList.getParameterValue("open-register",(int)0);
@@ -8167,8 +8261,97 @@ void CUserManagerApp::OnLCULLogonResponse(const CPOPSotpRequestInfo::pointer & p
 		const int nEBServerVersion = pResponseInfo->m_pResponseList.getParameterValue("server-version",(int)0);
 		const tstring sDefaultUrl(pResponseInfo->m_pResponseList.getParameterValue("default-url"));
 
+
 		if (m_userStatus == US_DevAppIdLogoning)
 		{
+#ifdef Q_OS_ANDROID
+            /// 格式：sslid1,[0/1,1表示支持推送其他品牌手机];... 例子：100,1;200,0
+            m_pSslIdList.clear();
+            std::vector<tstring> pSslIdList;
+            ParseString(sPushSslIdList,";",false,pSslIdList);
+            for (size_t i=0;i<pSslIdList.size();i++) {
+                const tstring sSslIdInfo(pSslIdList[i]);
+                std::vector<tstring> tempList;
+                if (ParseString(sSslIdInfo,",",false,tempList)==2) {
+                    const eb::bigint sslid = cgc_atoi64(tempList[0].c_str());
+                    const eb::bigint isSupportOther = atoi(tempList[1].c_str());
+                    m_pSslIdList.insert(sslid, isSupportOther);
+                }
+            }
+            if (!m_pSslIdList.empty()) {
+                if (m_manufacturer.isEmpty()) {
+                    QAndroidJniObject name = QAndroidJniObject::callStaticObjectMethod
+                            ("com/entboost/utils/PhoneInfo" // class name
+                             , "getManufacturerName" // method name
+                             , "()Ljava/lang/String;");
+                    m_manufacturer = name.toString();
+                    if (m_manufacturer.indexOf("Xiaomi")>=0) {
+                        /// 小米消息推送SSLID
+                        m_nPushSslId = 200;
+                    }
+                    else if (m_manufacturer.indexOf("HUAWEI")>=0) {
+                        /// 华为消息推送SSLID
+                        m_nPushSslId = 100;
+                    }
+                    if (m_nPushSslId>0 && m_pSslIdList.exist(m_nPushSslId)) {
+                        ///
+                    }
+                    else {
+                        m_nPushSslId = 0;
+                        AUTO_RLOCK(m_pSslIdList);
+                        CLockMap<mycp::bigint,int>::const_iterator iter = m_pSslIdList.begin();
+                        for (; iter!=m_pSslIdList.end(); iter++) {
+                            const eb::bigint sslid = iter->first;
+                            const int isSupportOther = iter->second;
+                            if (isSupportOther==1) {
+                                m_nPushSslId = sslid;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (m_sPushToken.isEmpty()) {
+                    if (m_nPushSslId==200) {
+                        /// 小米推送
+                        /// 小米推送平台申请的APPID
+                        const QString XIAOMI_PushAppId = "2882303761517619842"; ///注意：填入你自己应用所申请的APPID
+                        /// 小米推送平台申请的APPKey
+                        const QString XIAOMI_PushAppKey = "5201761947842"; ///注意：填入你自己应用所申请的APPKey
+
+                        QAndroidJniObject context = QtAndroid::androidContext();
+                        QAndroidJniObject pushAppId = QAndroidJniObject::fromString(XIAOMI_PushAppId);
+                        QAndroidJniObject pushAppKey = QAndroidJniObject::fromString(XIAOMI_PushAppKey);
+
+                        QAndroidJniObject::callStaticMethod<void>(
+                                    "com/entboost/im/push/EntboostPushClient",
+                                    "registerPushXiaomi",
+                                    "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)V",
+                                    context.object<jobject>(),
+                                    pushAppId.object<jstring>(),
+                                    pushAppKey.object<jstring>()
+                                    );
+//                        m_timerIdGetPushToken = this->startTimer(3000);
+                        CProcessMsgInfo::pointer pProcessMsgInfo = CProcessMsgInfo::create(CProcessMsgInfo::PROCESS_MSG_TYPE_GET_PUSH_TOKEN);
+                        pProcessMsgInfo->m_tProcessTime = time(0) + 3;
+                        m_pProcessMsgList.add(pProcessMsgInfo);
+                    }
+                    else if (m_nPushSslId==100) {
+                        /// 华为推送
+                        QAndroidJniObject context = QtAndroid::androidContext();
+
+                        QAndroidJniObject::callStaticMethod<void>(
+                                    "com/entboost/im/push/EntboostPushClient",
+                                    "registerPushHUAWEI",
+                                    "(Landroid/content/Context;)V",
+                                    context.object<jobject>()
+                                    );
+                        CProcessMsgInfo::pointer pProcessMsgInfo = CProcessMsgInfo::create(CProcessMsgInfo::PROCESS_MSG_TYPE_GET_PUSH_TOKEN);
+                        pProcessMsgInfo->m_tProcessTime = time(0) + 3;
+                        m_pProcessMsgList.add(pProcessMsgInfo);
+                    }
+                }
+            }
+#endif
 			// 开发者ID验证返回
 			//m_sHttpServer = sHttpServer;
 			m_sDevAppId = m_pLogonCenter->GetAppId();
@@ -12435,16 +12618,15 @@ void CUserManagerApp::OnFUMEMDepInfo(const CEBGroupInfo::pointer& pDepartmentInf
 	//	SaveMyGroupInfo(m_nServerMyDepInfoVer);
 	//}
 
-	if (nGroupInfoVer>0)
-	{
+	if (nGroupInfoVer>0) {
 		// 单独加载某群组资料时，返回版本号，自动判断并更新；
 		UpdateLocalGroupInfoVer(pDepartmentInfo->m_sEnterpriseCode,nGroupInfoVer);
 		// 加载一次群组在线人数；
-		if (pDepartmentInfo->m_nOnlineSize<=0)	// 可能是群组（讨论组），需要加载一次在线人数；
+		if (pDepartmentInfo->m_nOnlineSize<=0) {	// 可能是群组（讨论组），需要加载一次在线人数；
 			LoadInfo(0,0,0,0,0,0,pDepartmentInfo->m_sGroupCode);
+		}
 
-		if ((int)pDepartmentInfo->m_pMemberList.size()>=pDepartmentInfo->m_nEmpCount)
-		{
+		if ((int)pDepartmentInfo->m_pMemberList.size()>=pDepartmentInfo->m_nEmpCount) {
 			theCheckGroupMemberList.remove(s_dep_code);
 			theGroupMemberDataTime.remove(s_dep_code);
 			SaveGroupMemberInfo(pDepartmentInfo);
@@ -12452,11 +12634,11 @@ void CUserManagerApp::OnFUMEMDepInfo(const CEBGroupInfo::pointer& pDepartmentInf
 	}
 	ProcessGroupInfo(pDepartmentInfo);
 
-	if (nCallGroupId>0 && nCallGroupId==s_dep_code)
-	{
+	if (nCallGroupId>0 && nCallGroupId==s_dep_code) {
 		CallGroup(nCallGroupId,true);
 	}
 }
+
 void CUserManagerApp::OnFUMEMDepInfo(const CPOPSotpRequestInfo::pointer & pSotpRequestInfo, const CPOPSotpResponseInfo::pointer & pSotpResponseInfo,const CPOPCUserManager* pUMOwner)
 {
 	// 是否请求呼叫该群组；
@@ -12549,6 +12731,11 @@ void CUserManagerApp::OnFUMEMDepInfo(const CPOPSotpRequestInfo::pointer & pSotpR
 		{
 			m_nReturnEntGroupInfoSize++;
 		}
+		
+		if (m_tReLoadInfo>0) {
+			m_tReLoadInfo = time(0) + 5;				// 延迟5秒后再加载离线消息
+		}
+
 	}else if (pDepartmentInfo->m_sEnterpriseCode!=s_ent_code)
 	{
 		pDepartmentInfo->m_sEnterpriseCode = s_ent_code;
@@ -15537,40 +15724,37 @@ void CUserManagerApp::OnFUMEMEmpInfo(const CPOPSotpRequestInfo::pointer & pSotpR
 
 	// fro search key
 	cgcParameter::pointer pCallback;
-	if (pSotpRequestInfo.get()!=NULL)
+	if (pSotpRequestInfo.get()!=NULL) {
 		pCallback = pSotpRequestInfo->m_pRequestList.getParameter("search-callback");
-	if (pCallback.get()!=NULL && pCallback->getPointer()!=NULL)
-	{
-		if (s_emp_code==0 || sMemberUserId==0)
-		{
+	}
+
+	if (pCallback.get()!=NULL && pCallback->getPointer()!=NULL) {
+		if (s_emp_code==0 || sMemberUserId==0) {
 			const tstring sSearchKey = pSotpRequestInfo->m_pRequestList.getParameterValue("search-key");
-			if (!IsFullNumber(sSearchKey.c_str(),sSearchKey.size()) && (m_sSearchNullKey.empty() || sSearchKey.find(m_sSearchNullKey)==std::string::npos))
-			{
+			if (!IsFullNumber(sSearchKey.c_str(),sSearchKey.size()) && (m_sSearchNullKey.empty() || sSearchKey.find(m_sSearchNullKey)==std::string::npos)) {
 				m_sSearchNullKey = sSearchKey;
 			}
 			return;
 		}
 		//const tstring sSearchkey = pSotpRequestInfo->m_pRequestList.getParameterValue("search-key");
 		CEBGroupInfo::pointer pDepartmentInfo;
-		if (!theDepartmentList.find(s_dep_code, pDepartmentInfo))
-		{
+		if (!theDepartmentList.find(s_dep_code, pDepartmentInfo)) {
 			pDepartmentInfo = CEBGroupInfo::create(0,s_dep_code);
 		}
 		const unsigned long nSearchParam = (unsigned long)pSotpRequestInfo->m_pRequestList.getParameterValue("search-param",(mycp::bigint)0);
 		CEBSearchCallback* pSearchCallback = (CEBSearchCallback*)pCallback->getPointer();
-		try
-		{
+
+		try {
 			bool bNewMemberInfo = !pDepartmentInfo->m_pMemberList.exist(sMemberUserId);
 			//bool bNewMemberInfo = false;
 			CEBMemberInfo::pointer pEmployeeInfo;
-			if (!theEmployeeList.find(s_emp_code, pEmployeeInfo))
-			{
+			if (!theEmployeeList.find(s_emp_code, pEmployeeInfo)) {
 				//bNewMemberInfo = true;
 				pEmployeeInfo = CEBMemberInfo::create(s_dep_code,sMemberUserId);
 				pEmployeeInfo->m_nMemberData |= EB_MEMBER_DATA_SEARCH_INFO;
 				theEmployeeList.insert(s_emp_code, pEmployeeInfo,false);
-			}else if (bNewMemberInfo)
-			{
+			}
+			else if (bNewMemberInfo) {
 				bNewMemberInfo = false;
 			}
 
@@ -15609,8 +15793,8 @@ void CUserManagerApp::OnFUMEMEmpInfo(const CPOPSotpRequestInfo::pointer & pSotpR
 
 		return;
 	}
-	if (s_emp_code==0 || nEmpCount>=0)
-	{
+
+	if (s_emp_code==0 || nEmpCount>=0) {
 		//const mycp::bigint sGroupCode = pSotpResponseInfo->m_pResponseList.getParameterValue("dep-code",(mycp::bigint)0);
 		//theCheckGroupMemberList.remove(sGroupCode);
 		////if (sGroupCode==999004)
@@ -15640,11 +15824,14 @@ void CUserManagerApp::OnFUMEMEmpInfo(const CPOPSotpRequestInfo::pointer & pSotpR
 
 	bool bNewMemberInfo = false;
 	CEBMemberInfo::pointer pEmployeeInfo;
-	if (!theEmployeeList.find(s_emp_code, pEmployeeInfo))
-	{
+	if (!theEmployeeList.find(s_emp_code, pEmployeeInfo)) {
 		bNewMemberInfo = true;
 		pEmployeeInfo = CEBMemberInfo::create(s_dep_code,sMemberUserId);
 		theEmployeeList.insert(s_emp_code, pEmployeeInfo);
+
+		if (m_tReLoadInfo>0) {
+			m_tReLoadInfo = time(0) + 5;				// 延迟5秒后再加载离线消息
+		}
 	}
 	pEmployeeInfo->m_sMemberAccount = s_emp_account;
 	pEmployeeInfo->m_nMemberUserId = sMemberUserId;
@@ -20164,7 +20351,10 @@ void CUserManagerApp::OnUMSMOnlineResponse(const CPOPSotpRequestInfo::pointer & 
 		m_pMyAccountInfo->SetOnlineTime(time(0));
 		m_pMyAccountInfo->SetAccessToken(sAccessToken);
 		m_userStatus = US_Logoned;
-	
+#ifdef Q_OS_ANDROID
+        sendUMSPush();
+#endif
+
 		if (this->m_callback)
 			m_callback->onLogonSuccess(*pAccountInfo);
 		if (m_pHwnd!=NULL) {
