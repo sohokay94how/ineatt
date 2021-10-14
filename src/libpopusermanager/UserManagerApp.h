@@ -232,6 +232,9 @@ public:
 		, PROCESS_MSG_TYPE_CHECK_RESOURCE_REFRESH
 		, PROCESS_MSG_TYPE_DELETE_HEAD_RESFILE
 		//, PROCESS_MSG_TYPE_CHECK_MEMBER_HEAD
+#ifdef Q_OS_ANDROID
+        , PROCESS_MSG_TYPE_GET_PUSH_TOKEN
+#endif
         , PROCESS_MSG_TYPE_LOG_MESSAGE				= 200
 	};
 	static CProcessMsgInfo::pointer create(PROCESS_MSG_TYPE nMsg)
@@ -281,8 +284,7 @@ class CUserManagerApp
 #endif
 {
 public:
-    enum UserStatus
-	{
+    enum UserStatus {
 		US_Logout
 		, US_DevAppIdLogoning
 		, US_Logging
@@ -295,13 +297,10 @@ public:
 	CUserManagerApp(void);
 	virtual ~CUserManagerApp(void);
 //#ifdef _DEBUG
-//	tstring abctest3(void) const {return "abc";}
-//	tstring abctest4(void) const {return "abc";}
-//	tstring abctest6(void) const {return "abc";}
-//	tstring abctest5(void) const {return "abc";}
-//	tstring abctest2(void) const {return "abc";}
+//	tstring abctest3(int a) const {return "abc";}
 //	int abctest1(int a) const {return 22+a;}
 //#endif
+
 	int LogonAppCenter(void);
 	int LogoutAppCenter(void);
 	int SendAPMsg(const EB_APMsgInfo& pAPMsgInfo, bool bSaveOffMsg);
@@ -331,7 +330,7 @@ public:
 	int ReLogon(void);
 	int m_nLoadSubFunc;
 	void LoadInfo(int nLoadSubFunc=1,int nLoadMsg=1,int nLoadGroupVer=0,mycp::bigint nLoadOLSGroupId=0, int nLoadEntGroupOLS=0,int nLoadUserGroupOLS=0, mycp::bigint nLoadGroupOLSGid=0, const tstring& sLoadGroupOLSGid="");
-	void Logout(void);
+    void Logout(bool acceptPush);
 
 	int GetSubGroupMemberSize(eb::bigint nParentGroupId) const;
 	bool GetSubGroupMemberSize(eb::bigint nParentGroupId, int& pOutMemberSize, int& pOutOnlineSize) const;
@@ -734,6 +733,16 @@ private:
 	// 1=取消群组共享文件，不需要处理
 	CLockMap<mycp::bigint,int> m_pWaitList1;					// msgid/callid->
 	CLockMap<mycp::bigint,int> m_pWaitList2;					// group_id/->
+#ifdef Q_OS_ANDROID
+    CLockMap<mycp::bigint,int> m_pSslIdList;					// ssl-id->[0/1 1表示，支持其他品牌消息推送]
+    /// manufacturer	"Xiaomi"	QString
+    /// HUAWEI
+    QString m_manufacturer;
+    eb::bigint m_nPushSslId;
+    QString m_sPushToken;
+    bool m_sentSPush;   /// 是否已经调用  eb_u_spush
+//    int m_timerIdGetPushToken;
+#endif
 	void DoProcess(void);
 
 #ifdef _QT_MAKE_
@@ -744,6 +753,13 @@ protected:
     CLockMap<unsigned long,long> m_eventResult;
     virtual void customEvent(QEvent *e);
     void doEBUMEvent(QEvent *e);
+
+#ifdef Q_OS_ANDROID
+    virtual void timerEvent(QTimerEvent *e);
+    void getPushToken();
+    void sendUMSPush();
+#endif
+
 #endif
 private:
 	static eb::bigint GetNextBigId(void)	// index++ 16
@@ -763,7 +779,7 @@ private:
 	}
 	virtual void OnProcessTimer(const CPOPCUserManager* pUMOwner);
 	tstring GetNextLCAddress(void);
-	void ProcessTimeout(const CPOPSotpRequestInfo::pointer& pRequestInfo);
+	void ProcessTimeout(const CPOPSotpRequestInfo::pointer& pRequestInfo, const void * p);
 	virtual void OnTimeout(const CPOPSotpRequestInfo::pointer& pRequestInfo,const CPOPCUserManager* pUMOwner);
 	virtual void OnTimeout(const CPOPSotpRequestInfo::pointer& pRequestInfo,const CPOPCLogonCenter* pLCOwner);
 	virtual void OnTimeout(const CPOPSotpRequestInfo::pointer& pRequestInfo,const CEBCAppCenter* pAPOwner);
